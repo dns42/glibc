@@ -29,7 +29,7 @@ int
 __pthread_rwlock_rdlock (rwlock)
      pthread_rwlock_t *rwlock;
 {
-  int result = 0;
+  int result = 0, wake = 0;
 
   LIBC_PROBE (rdlock_entry, 1, rwlock);
 
@@ -44,6 +44,14 @@ __pthread_rwlock_rdlock (rwlock)
 	  && (!rwlock->__data.__nr_writers_queued
 	      || PTHREAD_RWLOCK_PREFER_READER_P (rwlock)))
 	{
+	  /* May have prempted a queued writer. Since readers are
+	     preferred, proceed. But wake any queued readers, too. */
+	  wake = !rwlock->__data.__nr_readers
+		 && rwlock->__data.__nr_writers_queued
+		 && rwlock->__data.__nr_readers_queued;
+	  if (__builtin_expect(wake, 0))
+	    ++rwlock->__data.__readers_wakeup;
+
 	  /* Increment the reader counter.  Avoid overflow.  */
 	  if (__builtin_expect (++rwlock->__data.__nr_readers == 0, 0))
 	    {
@@ -92,6 +100,10 @@ __pthread_rwlock_rdlock (rwlock)
 
   /* We are done, free the lock.  */
   lll_unlock (rwlock->__data.__lock, rwlock->__data.__shared);
+
+  if (__builtin_expect(wake, 0))
+    lll_futex_wake (&rwlock->__data.__readers_wakeup, INT_MAX,
+		    rwlock->__data.__shared);
 
   return result;
 }
